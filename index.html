@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Hacker Flappy Bird</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&display=swap');
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000000;
+            color: #00FF00;
+            font-family: 'Fira Code', monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            touch-action: none; /* Prevent scroll on tap */
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            border: 2px solid #00FF00;
+            box-sizing: border-box;
+            box-shadow: inset 0 0 15px rgba(0, 255, 0, 0.2);
+            background-color: #050505;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            text-shadow: 0 0 5px #00FF00;
+        }
+
+        h1, h2, p {
+            margin: 10px 0;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        #start-screen, #game-over-screen {
+            background: rgba(0, 0, 0, 0.85);
+            padding: 20px;
+            border: 1px solid #00FF00;
+            border-radius: 5px;
+            pointer-events: auto;
+        }
+
+        .blink {
+            animation: blinker 1s linear infinite;
+        }
+
+        @keyframes blinker {
+            50% { opacity: 0; }
+        }
+
+        .btn {
+            background-color: transparent;
+            color: #00FF00;
+            border: 1px solid #00FF00;
+            padding: 10px 20px;
+            font-family: 'Fira Code', monospace;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 15px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+        }
+
+        .btn:hover {
+            background-color: #00FF00;
+            color: #000000;
+        }
+
+        /* Scanline effect */
+        #game-container::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 2;
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        
+        <div id="start-screen" class="ui-layer">
+            <h1>root@flappy:~#</h1>
+            <p>Initiate jump sequence.</p>
+            <p class="blink">[ SPACE / TAP ] TO START</p>
+        </div>
+
+        <div id="game-over-screen" class="ui-layer hidden">
+            <h2>TRY YOUR BEST</h2>
+            <h1 id="final-score">Score: 0</h1>
+            <p>High Score: <span id="high-score-display">0</span></p>
+            <button id="restart-btn" class="btn">Attempt Again</button>
+        </div>
+
+        <div id="score-display" class="ui-layer hidden" style="justify-content: flex-start; padding-top: 20px; font-size: 24px; font-weight: bold;">
+            0
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global variables provided by environment or default fallbacks
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'hacker-flappy-bird';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        
+        let app, auth, db, userId;
+        let globalHighScore = 0;
+
+        // Try to init Firebase if config exists
+        try {
+            if (Object.keys(firebaseConfig).length > 0) {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                initAuth();
+            } else {
+                console.warn("No Firebase config found. Running locally without cloud high scores.");
+            }
+        } catch (e) {
+            console.error("Firebase init error", e);
+        }
+
+        async function initAuth() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                userId = auth.currentUser.uid;
+                listenToGlobalHighScore();
+            } catch (error) {
+                console.error("Authentication failed:", error);
+            }
+        }
+
+        function listenToGlobalHighScore() {
+            if (!userId || !db) return;
+            const scoreRef = doc(db, 'artifacts', appId, 'public', 'data', 'global_scores', 'highscore_doc');
+            
+            onSnapshot(scoreRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    globalHighScore = docSnap.data().score || 0;
+                    document.getElementById('high-score-display').innerText = globalHighScore;
+                }
+            }, (error) => {
+                console.error("Error fetching high score:", error);
+            });
+        }
+
+        async function submitHighScore(score) {
+            if (!userId || !db) return;
+            if (score > globalHighScore) {
+                const scoreRef = doc(db, 'artifacts', appId, 'public', 'data', 'global_scores', 'highscore_doc');
+                try {
+                    await setDoc(scoreRef, { score: score, timestamp: new Date().toISOString() }, { merge: true });
+                    globalHighScore = score;
+                } catch (error) {
+                    console.error("Error saving high score:", error);
+                }
+            }
+        }
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // UI Elements
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const scoreDisplay = document.getElementById('score-display');
+        const finalScoreText = document.getElementById('final-score');
+        const restartBtn = document.getElementById('restart-btn');
+
+        // Game Constants
+        let frames = 0;
+        let score = 0;
+        let gameState = 'START'; // START, PLAY, OVER
+        let animationId;
+        
+        // Ghost Feature variables
+        let currentRunHistory = [];
+        let previousRunHistory = [];
+
+        // Resize canvas to match container
+        function resizeCanvas() {
+            const container = document.getElementById('game-container');
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        const bird = {
+            x: canvas.width / 4,
+            y: canvas.height / 2,
+            w: 24,
+            h: 24,
+            velocity: 0,
+            gravity: 0.25,
+            jump: -5.5,
+            
+            draw(yPos = this.y, isGhost = false) {
+                ctx.save();
+                ctx.strokeStyle = isGhost ? 'rgba(0, 255, 0, 0.3)' : '#00FF00';
+                ctx.fillStyle = isGhost ? 'rgba(0, 255, 0, 0.05)' : '#000000';
+                ctx.lineWidth = 2;
+                ctx.translate(this.x, yPos);
+                
+                // Tilt the bird based on velocity (if not a ghost, or infer from current movement)
+                if (!isGhost) {
+                    let rotation = Math.min(Math.PI / 4, Math.max(-Math.PI / 4, (this.velocity * 0.1)));
+                    ctx.rotate(rotation);
+                }
+
+                ctx.beginPath();
+                // Hacker Vector Bird Body
+                ctx.moveTo(-12, 0);   // Tail
+                ctx.lineTo(0, -10);   // Top head
+                ctx.lineTo(12, 0);    // Beak tip
+                ctx.lineTo(0, 10);    // Belly
+                ctx.closePath();
+                
+                // Wing geometry
+                ctx.moveTo(-4, 0);
+                ctx.lineTo(4, 0);
+                ctx.lineTo(0, 6);
+                ctx.closePath();
+
+                // Eye
+                ctx.moveTo(4, -4);
+                ctx.lineTo(6, -4);
+                
+                ctx.fill();
+                ctx.stroke();
+                ctx.restore();
+            },
+            
+            update() {
+                this.velocity += this.gravity;
+                this.y += this.velocity;
+                
+                // Floor collision (account for drawing offset)
+                if (this.y + (this.h/2) >= canvas.height) {
+                    this.y = canvas.height - (this.h/2);
+                    gameOver();
+                }
+                // Ceiling collision
+                if (this.y - (this.h/2) <= 0) {
+                    this.y = this.h/2;
+                    this.velocity = 0;
+                }
+            },
+            
+            flap() {
+                this.velocity = this.jump;
+            },
+            
+            reset() {
+                this.y = canvas.height / 2;
+                this.velocity = 0;
+                this.x = canvas.width / 4; // recalculate in case of resize
+            }
+        };
+
+        const pipes = {
+            items: [],
+            width: 60,
+            gap: 150,
+            dx: 3, // Speed
+            squareSize: 8,
+            squareGap: 2,
+            
+            draw() {
+                const step = this.squareSize + this.squareGap;
+                
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i];
+                    
+                    ctx.fillStyle = '#00FF00'; // Green squares
+                    
+                    // Draw top pipe squares
+                    for (let py = 0; py < p.top; py += step) {
+                        for (let px = p.x; px < p.x + this.width; px += step) {
+                            ctx.fillRect(px, py, this.squareSize, this.squareSize);
+                        }
+                    }
+                    
+                    // Draw bottom pipe squares
+                    let bottomStart = canvas.height - p.bottom;
+                    for (let py = bottomStart; py < canvas.height; py += step) {
+                        for (let px = p.x; px < p.x + this.width; px += step) {
+                            ctx.fillRect(px, py, this.squareSize, this.squareSize);
+                        }
+                    }
+
+                    // Optional: Draw a thin border around the pipes for definition
+                    ctx.strokeStyle = '#00FF00';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(p.x, 0, this.width, p.top);
+                    ctx.strokeRect(p.x, bottomStart, this.width, p.bottom);
+                }
+            },
+            
+            update() {
+                // Add new pipe every 100 frames
+                if (frames % 100 === 0) {
+                    // Randomize gap position
+                    let minPipeHeight = 50;
+                    let maxPos = canvas.height - minPipeHeight - this.gap;
+                    let topHeight = Math.max(minPipeHeight, Math.random() * maxPos);
+                    let bottomHeight = canvas.height - this.gap - topHeight;
+                    
+                    this.items.push({
+                        x: canvas.width,
+                        top: topHeight,
+                        bottom: bottomHeight,
+                        passed: false
+                    });
+                }
+                
+                for (let i = 0; i < this.items.length; i++) {
+                    let p = this.items[i];
+                    p.x -= this.dx;
+                    
+                    // Collision detection
+                    // X-axis check
+                    if (bird.x + (bird.w/2) > p.x && bird.x - (bird.w/2) < p.x + this.width) {
+                        // Y-axis check (Top pipe or Bottom pipe)
+                        if (bird.y - (bird.h/2) < p.top || bird.y + (bird.h/2) > canvas.height - p.bottom) {
+                            gameOver();
+                        }
+                    }
+                    
+                    // Score increment
+                    if (p.x + this.width < bird.x && !p.passed) {
+                        score++;
+                        scoreDisplay.innerText = score;
+                        p.passed = true;
+                    }
+                    
+                    // Remove off-screen pipes
+                    if (p.x + this.width < 0) {
+                        this.items.shift();
+                        i--;
+                    }
+                }
+            },
+            
+            reset() {
+                this.items = [];
+            }
+        };
+
+        function drawMatrixBackground() {
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Subtle binary background
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.05)';
+            ctx.font = '10px monospace';
+            for (let i = 0; i < canvas.width; i += 30) {
+                if (Math.random() > 0.9) {
+                    ctx.fillText(Math.random() > 0.5 ? '1' : '0', i, (frames * 3) % canvas.height);
+                }
+            }
+        }
+
+        function gameLoop() {
+            drawMatrixBackground();
+            
+            if (gameState === 'PLAY') {
+                bird.update();
+                pipes.update();
+                
+                // Record history for the ghost
+                currentRunHistory.push(bird.y);
+            }
+            
+            pipes.draw();
+            
+            // Draw ghost bird from previous run
+            if (gameState === 'PLAY' && previousRunHistory[frames] !== undefined) {
+                bird.draw(previousRunHistory[frames], true);
+            }
+
+            // Draw player bird
+            bird.draw();
+            
+            if (gameState === 'PLAY') {
+                frames++;
+                animationId = requestAnimationFrame(gameLoop);
+            }
+        }
+
+        function startGame() {
+            gameState = 'PLAY';
+            bird.reset();
+            pipes.reset();
+            score = 0;
+            frames = 0;
+            currentRunHistory = []; // Reset history for new run
+            
+            scoreDisplay.innerText = score;
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            scoreDisplay.classList.remove('hidden');
+            
+            bird.flap();
+            gameLoop();
+        }
+
+        function gameOver() {
+            gameState = 'OVER';
+            submitHighScore(score); // Attempt to save score to Firebase
+            
+            // Save current run as the previous run for the ghost feature
+            previousRunHistory = [...currentRunHistory];
+            
+            finalScoreText.innerText = "Score: " + score;
+            
+            // Update local display if current score is higher than cached global
+            if (score > globalHighScore) {
+                 document.getElementById('high-score-display').innerText = score + " (NEW RECORD)";
+            }
+            
+            scoreDisplay.classList.add('hidden');
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        function inputHandler(e) {
+            // Prevent default behavior (like scrolling on spacebar/tap)
+            if (e.type === 'keydown' && e.code !== 'Space') return;
+            if (e.type === 'keydown') e.preventDefault();
+            
+            if (gameState === 'START') {
+                startGame();
+            } else if (gameState === 'PLAY') {
+                bird.flap();
+            }
+        }
+
+        window.addEventListener('keydown', inputHandler);
+        canvas.addEventListener('mousedown', inputHandler);
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            inputHandler(e);
+        }, { passive: false });
+
+        restartBtn.addEventListener('click', () => {
+            gameState = 'START';
+            gameOverScreen.classList.add('hidden');
+            startScreen.classList.remove('hidden');
+            // Draw initial frame
+            drawMatrixBackground();
+            bird.reset();
+            bird.draw();
+        });
+
+        // Initialize first frame view
+        window.onload = function() {
+            drawMatrixBackground();
+            bird.draw();
+        };
+
+    </script>
+</body>
+</html>
